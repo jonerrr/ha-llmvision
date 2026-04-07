@@ -137,12 +137,20 @@ class Request:
         # Check image input
         if not call.base64_images:
             raise ServiceValidationError(ERROR_NO_IMAGE_INPUT)
-        # Check if single image is provided for Groq
+        # Groq vision supports up to 5 images per request
         if (
-            len(call.base64_images) > 1
+            len(call.base64_images) > 5
             and self.get_provider(self.hass, call.provider) == "Groq"
         ):
             raise ServiceValidationError(ERROR_GROQ_MULTIPLE_IMAGES)
+        # Groq memory images also count toward the 5-image limit
+        if (
+            getattr(call, "use_memory", False)
+            and self.get_provider(self.hass, call.provider) == "Groq"
+        ):
+            memory_images = getattr(getattr(call, "memory", None), "memory_images", [])
+            if len(call.base64_images) + len(memory_images) > 5:
+                raise ServiceValidationError(ERROR_GROQ_MULTIPLE_IMAGES)
         # Check provider is configured
         if not call.provider:
             raise ServiceValidationError(ERROR_NOT_CONFIGURED)
@@ -1139,20 +1147,20 @@ class Groq(Provider):
 
     def _prepare_vision_data(self, call: Any) -> dict:
         default_parameters = self._get_default_parameters(call)
-        first_image = call.base64_images[0]
+        content = [{"type": "text", "text": call.message}]
+        for image in call.base64_images:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                }
+            )
+
         payload = {
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": call.message},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{first_image}"
-                            },
-                        },
-                    ],
+                    "content": content,
                 }
             ],
             "model": self.model,
@@ -1164,7 +1172,13 @@ class Groq(Provider):
         payload["messages"].insert(
             0, {"role": "system", "content": self._get_system_prompt()}
         )
-        # Groq does not support multiple images, so no memory
+        # Memory if use_memory is set
+        if getattr(call, "use_memory", False):
+            memory_content = call.memory._get_memory_images(memory_type="OpenAI")
+            if memory_content:
+                payload["messages"].insert(
+                    1, {"role": "user", "content": memory_content}
+                )
 
         # Add structured output format if requested
         if call.response_format == "json" and call.structure:

@@ -141,7 +141,7 @@ class TestRequest:
                 request.validate(call)
 
     def test_validate_groq_multiple_images(self, mock_hass_with_session):
-        """Test validate raises error for Groq with multiple images."""
+        """Test validate allows Groq requests with up to 5 images."""
         mock_hass_with_session.data = {
             DOMAIN: {
                 "test_provider": {"provider": "Groq"}
@@ -153,9 +153,67 @@ class TestRequest:
             call.model = "test-model"
             call.base64_images = ["img1", "img2"]
             call.provider = "test_provider"
-            
+            call.use_memory = False
+
+            # Should not raise
+            request.validate(call)
+
+    def test_validate_groq_too_many_images(self, mock_hass_with_session):
+        """Test validate raises error for Groq with more than 5 images."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {"provider": "Groq"}
+            }
+        }
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "test", 1000, 0.5)
+            call = Mock()
+            call.model = "test-model"
+            call.base64_images = ["img1", "img2", "img3", "img4", "img5", "img6"]
+            call.provider = "test_provider"
+
             with pytest.raises(ServiceValidationError):
                 request.validate(call)
+
+    def test_validate_groq_too_many_images_with_memory(self, mock_hass_with_session):
+        """Test validate raises error for Groq when request+memory images exceed 5."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {"provider": "Groq"}
+            }
+        }
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "test", 1000, 0.5)
+            call = Mock()
+            call.model = "test-model"
+            call.base64_images = ["img1", "img2", "img3"]
+            call.provider = "test_provider"
+            call.use_memory = True
+            call.memory = Mock()
+            call.memory.memory_images = ["mem1", "mem2", "mem3"]
+
+            with pytest.raises(ServiceValidationError):
+                request.validate(call)
+
+    def test_validate_groq_images_with_memory_within_limit(self, mock_hass_with_session):
+        """Test validate succeeds for Groq when request+memory images are within 5."""
+        mock_hass_with_session.data = {
+            DOMAIN: {
+                "test_provider": {"provider": "Groq"}
+            }
+        }
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            request = Request(mock_hass_with_session, "test", 1000, 0.5)
+            call = Mock()
+            call.model = "test-model"
+            call.base64_images = ["img1", "img2", "img3"]
+            call.provider = "test_provider"
+            call.use_memory = True
+            call.memory = Mock()
+            call.memory.memory_images = ["mem1", "mem2"]
+
+            # Should not raise
+            request.validate(call)
 
     def test_validate_success(self, mock_hass_with_session):
         """Test validate succeeds with valid data."""
@@ -470,6 +528,98 @@ class TestGroq:
             groq = Groq(mock_hass_with_session, "test_api_key", "llama-3")
             
             assert groq.supports_structured_output() is True
+
+    def test_prepare_vision_data_multiple_images(self, mock_hass_with_session):
+        """Test Groq _prepare_vision_data includes multiple images."""
+        from custom_components.llmvision.providers import Groq
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            groq = Groq(mock_hass_with_session, "test_api_key", "llama-3")
+            call = Mock()
+            call.max_tokens = 900
+            call.message = "Describe these frames"
+            call.base64_images = ["img1", "img2", "img3"]
+            call.provider = "test_provider"
+            call.response_format = "text"
+            call.structure = None
+            call.use_memory = False
+
+            mock_hass_with_session.data = {
+                DOMAIN: {
+                    "test_provider": {
+                        "provider": "Groq",
+                        "temperature": 0.4,
+                        "top_p": 0.8
+                    }
+                }
+            }
+
+            with patch.object(groq, "_get_system_prompt", return_value="System prompt"):
+                result = groq._prepare_vision_data(call)
+
+            assert len(result["messages"]) == 2
+            assert result["messages"][0] == {"role": "system", "content": "System prompt"}
+            assert result["messages"][1]["role"] == "user"
+            assert result["messages"][1]["content"][0] == {
+                "type": "text",
+                "text": "Describe these frames",
+            }
+            assert result["messages"][1]["content"][1:] == [
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,img1"}},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,img2"}},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,img3"}},
+            ]
+
+    def test_prepare_vision_data_with_memory(self, mock_hass_with_session):
+        """Test Groq _prepare_vision_data injects memory when enabled."""
+        from custom_components.llmvision.providers import Groq
+
+        with patch('custom_components.llmvision.providers.async_get_clientsession'):
+            groq = Groq(mock_hass_with_session, "test_api_key", "llama-3")
+            call = Mock()
+            call.max_tokens = 900
+            call.message = "Describe this frame"
+            call.base64_images = ["img1"]
+            call.provider = "test_provider"
+            call.response_format = "text"
+            call.structure = None
+            call.use_memory = True
+            call.memory = Mock()
+            call.memory._get_memory_images = Mock(
+                return_value=[
+                    {"type": "text", "text": "memory tag:"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/jpeg;base64,mem1"},
+                    },
+                ]
+            )
+
+            mock_hass_with_session.data = {
+                DOMAIN: {
+                    "test_provider": {
+                        "provider": "Groq",
+                        "temperature": 0.4,
+                        "top_p": 0.8
+                    }
+                }
+            }
+
+            with patch.object(groq, "_get_system_prompt", return_value="System prompt"):
+                result = groq._prepare_vision_data(call)
+
+            assert len(result["messages"]) == 3
+            assert result["messages"][0] == {"role": "system", "content": "System prompt"}
+            assert result["messages"][1]["role"] == "user"
+            assert result["messages"][1]["content"][0] == {
+                "type": "text",
+                "text": "memory tag:",
+            }
+            assert result["messages"][2]["role"] == "user"
+            assert result["messages"][2]["content"][0] == {
+                "type": "text",
+                "text": "Describe this frame",
+            }
 
 
 

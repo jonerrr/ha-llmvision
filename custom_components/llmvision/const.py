@@ -76,7 +76,7 @@ SENSOR_ENTITY = "sensor_entity"
 
 # Error messages
 ERROR_NOT_CONFIGURED = "{provider} is not configured"
-ERROR_GROQ_MULTIPLE_IMAGES = "Groq does not support videos or streams"
+ERROR_GROQ_MULTIPLE_IMAGES = "Groq supports a maximum of 5 images per request"
 ERROR_NO_IMAGE_INPUT = "No image input provided"
 ERROR_HANDSHAKE_FAILED = "Connection could not be established"
 
