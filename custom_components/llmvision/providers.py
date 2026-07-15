@@ -69,7 +69,6 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class Request:
-
     def __init__(self, hass: HomeAssistant, message, max_tokens, temperature):
         self.session = async_get_clientsession(hass)
         self.hass = hass
@@ -262,7 +261,12 @@ class Request:
                     # If JSON parsing fails or title_field not found, gen_title remains None
                     pass
             # For non-structured output, use traditional title generation
-            elif call.generate_title and call.response_format != "json":
+            elif (
+                call.generate_title
+                and call.response_format != "json"
+                and response_text
+                != "Couldn't generate content. Check logs for details."
+            ):
                 call.message = (
                     call.memory.title_prompt
                     + "Create a title for this text: "
@@ -521,10 +525,15 @@ class Provider(ABC):
         return await self._make_request(data)
 
     async def title_request(self, call: Any) -> str:
+        title_max_tokens = 256
         if isinstance(call, dict):
-            call["max_tokens"] = 4096
+            call["max_tokens"] = min(
+                int(call.get("max_tokens", title_max_tokens)), title_max_tokens
+            )
         else:
-            call.max_tokens = 4096
+            call.max_tokens = min(
+                int(getattr(call, "max_tokens", title_max_tokens)), title_max_tokens
+            )
         data = self._prepare_text_data(call)
         return await self._make_request(data)
 
@@ -595,7 +604,6 @@ class Provider(ABC):
 
 
 class OpenAI(Provider):
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -623,7 +631,9 @@ class OpenAI(Provider):
             if self.model.startswith(model_prefix):
                 # return the highest reasoning effort supported by the model that is less than or equal to the requested max_effort
                 for effort in reversed(effort_order):
-                    if effort in efforts and effort_order.index(effort) <= effort_order.index(max_effort):
+                    if effort in efforts and effort_order.index(
+                        effort
+                    ) <= effort_order.index(max_effort):
                         return effort
         return False
 
@@ -792,15 +802,12 @@ class OpenAI(Provider):
                     {"role": "user", "content": [{"type": "text", "text": "Hi"}]}
                 ],
             }
-            await self._post(
-                url=self._get_request_url(), headers=headers, data=data
-            )
+            await self._post(url=self._get_request_url(), headers=headers, data=data)
         else:
             raise ServiceValidationError("empty_api_key")
 
 
 class AzureOpenAI(Provider):
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -987,7 +994,6 @@ class AzureOpenAI(Provider):
 
 
 class Anthropic(Provider):
-
     def __init__(self, hass: HomeAssistant, api_key: str, model: str):
         super().__init__(hass, api_key, model)
 
@@ -1321,7 +1327,6 @@ class Google(Provider):
 
 
 class Groq(Provider):
-
     def __init__(self, hass: HomeAssistant, api_key: str, model: str):
         super().__init__(hass, api_key, model)
 
@@ -1467,7 +1472,6 @@ class Groq(Provider):
 
 
 class LocalAI(Provider):
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -1630,7 +1634,6 @@ class LocalAI(Provider):
 
 
 class Ollama(Provider):
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -1782,7 +1785,6 @@ class Ollama(Provider):
 
 
 class AWSBedrock(Provider):
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -1812,7 +1814,6 @@ class AWSBedrock(Provider):
         }
 
     async def _make_request(self, data: dict) -> str:
-
         if self.use_bearer_token:
             # Use Bearer token with direct HTTP API
             headers = self._generate_headers()

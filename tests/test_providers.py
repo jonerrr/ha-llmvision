@@ -1343,6 +1343,34 @@ async def test_request_call_generate_title_and_fallback_coverage(
 
 
 @pytest.mark.anyio
+async def test_request_call_skips_title_generation_after_vision_failure(
+    monkeypatch, coverage_hass
+):
+    req = Request(coverage_hass, "m", 10, 0.2)
+    req.base64_images = ["aW1n"]
+    req.filenames = ["f.jpg"]
+
+    provider = DummyProvider(
+        response_text="Couldn't generate content. Check logs for details.",
+        fail_title=True,
+        supports=False,
+    )
+    monkeypatch.setattr(ProviderFactory, "create", lambda **kwargs: provider)
+
+    call_obj = make_coverage_call(
+        provider="provider_groq",
+        model="mixtral",
+        generate_title=True,
+        response_format="text",
+    )
+
+    result = await req.call(call_obj)
+
+    assert result["response_text"] == "Couldn't generate content. Check logs for details."
+    assert "title" not in result
+
+
+@pytest.mark.anyio
 async def test_provider_post_success_and_errors_coverage(coverage_hass):
     provider = OpenAI(coverage_hass, "k", "gpt-4")
 
@@ -1593,8 +1621,9 @@ async def test_provider_vision_title_request_delegate_coverage(coverage_hass):
     provider = MinimalProvider(coverage_hass, "", "m")
     call_obj = make_coverage_call()
     assert await provider.vision_request(vars(call_obj)) == "ok"
+    call_obj.max_tokens = 1000
     assert await provider.title_request(vars(call_obj)) == "ok"
-    assert call_obj.max_tokens == 4096
+    assert call_obj.max_tokens == 256
     assert provider.supports_structured_output() is False
 
 
@@ -2015,8 +2044,9 @@ async def test_provider_base_additional_paths(coverage_hass):
     assert await Provider.validate(provider) is None
 
     obj_call = make_coverage_call()
+    obj_call.max_tokens = 1000
     assert await provider.title_request(obj_call) == "ok"
-    assert obj_call.max_tokens == 4096
+    assert obj_call.max_tokens == 256
 
     bad_response = Mock()
     bad_response.text = AsyncMock(side_effect=RuntimeError("boom"))
